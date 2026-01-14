@@ -1,35 +1,16 @@
 # Swedish meteorological stations
 # Format: station_id, latitude, longitude, name
+# Default test stations (within 50 km of each other for correlation testing)
 stations:
   - id: "ESSB"  # Stockholm-Bromma Airport
     name: "Stockholm-Bromma"
     lat: 59.3544
     lon: 17.9419
 
-  - id: "ESGG"  # Göteborg Landvetter Airport
-    name: "Göteborg-Landvetter"
-    lat: 57.6628
-    lon: 12.2798
-
-  - id: "ESOW"  # Västerås/Hässlö Airport
-    name: "Västerås"
-    lat: 59.5894
-    lon: 16.6336
-
-  - id: "ESNQ"  # Kiruna Airport
-    name: "Kiruna"
-    lat: 67.8220
-    lon: 20.3368
-
-  - id: "ESNN"  # Sundsvall-Härnösand Airport
-    name: "Sundsvall-Härnösand"
-    lat: 62.5281
-    lon: 17.4439
-
-  - id: "ESMS"  # Malmö Sturup Airport
-    name: "Malmö"
-    lat: 55.5363
-    lon: 13.3762
+  - id: "ESSA"  # Stockholm-Arlanda Airport (~33 km from ESSB)
+    name: "Stockholm-Arlanda"
+    lat: 59.6519
+    lon: 17.9186
 
 # ERA5 parameters
 era5:
