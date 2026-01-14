@@ -45,6 +45,27 @@ cp .cdsapirc.example ~/.cdsapirc
 # Edit ~/.cdsapirc with your actual UID and API key
 ```
 
+## Features
+
+### Unified ERA5 Downloader
+
+The repository now includes a unified ERA5 downloader (`wind_correlation_analysis/src/data_acquisition/era5_downloader.py`) that consolidates all ERA5 download functionality:
+
+- **Support for multiple data types**:
+  - Pressure-level data (for geostrophic wind calculation)
+  - Single-level data (100m, 10m wind for advection analysis)
+
+- **Intelligent caching**:
+  - Automatically caches downloaded files to avoid duplicate downloads
+  - Checks both time period and geographic domain before downloading
+  - Cache metadata stored in `.era5_cache.json`
+  - Can be disabled by setting `enable_cache=False`
+
+- **Consistent API**:
+  - Unified error handling
+  - Better logging and progress reporting
+  - Flexible date format support (datetime objects or ISO strings)
+
 ## Quick Start
 
 ### Option 1: Quick Test (No Download Required)
