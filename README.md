@@ -1,6 +1,16 @@
 # ERA5 Data Downloader
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/OlleViotti/cc_test/main?labpath=example_analysis.ipynb)
+
+**Run the analysis notebook directly in your browser - no installation required!**
+
 A Python tool for downloading ERA5 reanalysis data from the Copernicus Climate Data Store (CDS).
+
+## Run Online with Binder
+
+Click the Binder badge above to launch the notebook in your browser. No local installation required!
+
+**Note:** To download ERA5 data, you'll need a free account at the [Copernicus Climate Data Store](https://cds.climate.copernicus.eu/). When the notebook opens, run the first cell to enter your API credentials.
 
 ## Overview
 

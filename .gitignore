@@ -64,4 +64,3 @@ output/
 
 # Jupyter
 .ipynb_checkpoints/
-*.ipynb
