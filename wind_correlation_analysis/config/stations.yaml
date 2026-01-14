@@ -1,0 +1,34 @@
+# Swedish meteorological stations
+# Format: station_id, latitude, longitude, name
+# Default test stations (within 50 km of each other for correlation testing)
+stations:
+  - id: "ESSB"  # Stockholm-Bromma Airport
+    name: "Stockholm-Bromma"
+    lat: 59.3544
+    lon: 17.9419
+
+  - id: "ESSA"  # Stockholm-Arlanda Airport (~33 km from ESSB)
+    name: "Stockholm-Arlanda"
+    lat: 59.6519
+    lon: 17.9186
+
+# ERA5 parameters
+era5:
+  bbox:  # Bounding box for Sweden [west, south, east, north]
+    west: 10.0
+    south: 55.0
+    east: 25.0
+    north: 70.0
+
+  # Variables needed
+  variables:
+    - '10m_u_component_of_wind'
+    - '10m_v_component_of_wind'
+    - 'geopotential'
+    - 'surface_pressure'
+
+  # For geostrophic wind calculation at 850 hPa
+  pressure_levels:
+    - 850
+    - 925
+    - 1000
