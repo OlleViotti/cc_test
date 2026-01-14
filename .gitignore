@@ -37,6 +37,9 @@ env/
 *.grib
 *.grb
 
+# ERA5 download cache
+.era5_cache.json
+
 # API credentials
 .cdsapirc
 

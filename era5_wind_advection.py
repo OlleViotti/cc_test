@@ -2,17 +2,22 @@
 ERA5 Wind Advection Analysis
 
 This module provides functions to:
-1. Download ERA5 wind speed data on a full grid
+1. Download ERA5 wind speed data on a full grid (via unified ERA5Downloader)
 2. Compute advection velocity from wind pattern movement
 """
 
-import cdsapi
+import sys
+import os
+
+# Add the wind_correlation_analysis package to the path if needed
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'wind_correlation_analysis'))
+
+from wind_correlation_analysis.src.data_acquisition.era5_downloader import ERA5Downloader
 import xarray as xr
 import numpy as np
 from scipy import signal
 from scipy.ndimage import shift
-from typing import Tuple, Dict, Optional
-import os
+from typing import Tuple, Dict, Optional, List
 from datetime import datetime, timedelta
 
 
@@ -20,13 +25,13 @@ def download_era5_wind_grid(
     output_file: str,
     start_date: str,
     end_date: str,
-    time_hours: list,
-    area: Optional[list] = None,
+    time_hours: List[str],
+    area: Optional[List[float]] = None,
     height: int = 100,
-    variables: Optional[list] = None
+    variables: Optional[List[str]] = None
 ) -> str:
     """
-    Download ERA5 wind speed data on a full grid.
+    Download ERA5 wind speed data on a full grid using the unified ERA5Downloader.
 
     Parameters
     ----------
@@ -45,7 +50,7 @@ def download_era5_wind_grid(
         Height above ground level in meters (typical wind turbine hub height)
         Default is 100m
     variables : list, optional
-        Variables to download. Default is ['u_component_of_wind', 'v_component_of_wind']
+        Variables to download. Default is auto-selected based on height
 
     Returns
     -------
@@ -54,73 +59,35 @@ def download_era5_wind_grid(
 
     Notes
     -----
-    This function downloads wind data at wind turbine hub height (typically 80-100m).
-    The data includes both u (eastward) and v (northward) wind components needed
-    for advection velocity computation.
+    This function uses the unified ERA5Downloader class to download wind data
+    at wind turbine hub height (typically 80-100m). The data includes both
+    u (eastward) and v (northward) wind components needed for advection
+    velocity computation.
 
     You need to have a CDS API key configured (~/.cdsapirc) to use this function.
     Sign up at: https://cds.climate.copernicus.eu/
     """
+    # Initialize the unified downloader
+    # Extract the output directory from output_file
+    output_dir = os.path.dirname(output_file) or '.'
+    downloader = ERA5Downloader(output_dir=output_dir)
 
-    if variables is None:
-        variables = [
-            'u_component_of_wind',
-            'v_component_of_wind',
-        ]
+    # Download using the unified downloader
+    downloaded_file = downloader.download_single_level_data(
+        start_date=start_date,
+        end_date=end_date,
+        area=area,
+        variables=variables,
+        time_hours=time_hours,
+        height=height
+    )
 
-    # Initialize CDS API client
-    c = cdsapi.Client()
+    # Rename to the requested output file if different
+    if downloaded_file != output_file:
+        import shutil
+        shutil.move(downloaded_file, output_file)
+        print(f"Renamed to: {output_file}")
 
-    # Prepare request parameters
-    request = {
-        'product_type': 'reanalysis',
-        'format': 'netcdf',
-        'variable': variables,
-        'date': f'{start_date}/{end_date}',
-        'time': time_hours,
-        'levtype': 'sfc',
-    }
-
-    # For single level data, we use 10m wind and can scale
-    # For actual hub height, we'd need model levels or pressure levels
-    # Here we use 100m wind from single level
-    dataset = 'reanalysis-era5-single-level'
-
-    # If height is 100m, use 100m wind variables
-    if height == 100:
-        request['variable'] = [
-            '100m_u_component_of_wind',
-            '100m_v_component_of_wind',
-        ]
-    elif height == 10:
-        request['variable'] = [
-            '10m_u_component_of_wind',
-            '10m_v_component_of_wind',
-        ]
-    else:
-        # For other heights, we would need pressure/model level data
-        print(f"Warning: Height {height}m not directly available. Using 100m wind data.")
-        request['variable'] = [
-            '100m_u_component_of_wind',
-            '100m_v_component_of_wind',
-        ]
-
-    # Add area if specified
-    if area is not None:
-        request['area'] = area
-
-    # Download the data
-    print(f"Downloading ERA5 wind data from {start_date} to {end_date}...")
-    print(f"Variables: {request['variable']}")
-    print(f"Time steps: {time_hours}")
-    if area:
-        print(f"Area: {area}")
-    else:
-        print("Area: Global")
-
-    c.retrieve(dataset, request, output_file)
-
-    print(f"Download complete: {output_file}")
     return output_file
 
 
