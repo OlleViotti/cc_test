@@ -1,0 +1,53 @@
+# Swedish meteorological stations
+# Format: station_id, latitude, longitude, name
+stations:
+  - id: "ESSB"  # Stockholm-Bromma Airport
+    name: "Stockholm-Bromma"
+    lat: 59.3544
+    lon: 17.9419
+
+  - id: "ESGG"  # Göteborg Landvetter Airport
+    name: "Göteborg-Landvetter"
+    lat: 57.6628
+    lon: 12.2798
+
+  - id: "ESOW"  # Västerås/Hässlö Airport
+    name: "Västerås"
+    lat: 59.5894
+    lon: 16.6336
+
+  - id: "ESNQ"  # Kiruna Airport
+    name: "Kiruna"
+    lat: 67.8220
+    lon: 20.3368
+
+  - id: "ESNN"  # Sundsvall-Härnösand Airport
+    name: "Sundsvall-Härnösand"
+    lat: 62.5281
+    lon: 17.4439
+
+  - id: "ESMS"  # Malmö Sturup Airport
+    name: "Malmö"
+    lat: 55.5363
+    lon: 13.3762
+
+# ERA5 parameters
+era5:
+  bbox:  # Bounding box for Sweden [west, south, east, north]
+    west: 10.0
+    south: 55.0
+    east: 25.0
+    north: 70.0
+
+  # Variables needed
+  variables:
+    - '10m_u_component_of_wind'
+    - '10m_v_component_of_wind'
+    - 'geopotential'
+    - 'surface_pressure'
+
+  # For geostrophic wind calculation at 850 hPa
+  pressure_levels:
+    - 850
+    - 925
+    - 1000
