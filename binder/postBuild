@@ -1,0 +1,11 @@
+#!/bin/bash
+
+# Create a template .cdsapirc file for users to configure
+cat > ~/.cdsapirc.template << 'EOF'
+url: https://cds.climate.copernicus.eu/api
+key: YOUR_UID:YOUR_API_KEY
+EOF
+
+echo "Binder environment ready!"
+echo "To use ERA5 downloads, you'll need to configure your CDS API credentials."
+echo "Run the first cell in the notebook to set up your credentials."
