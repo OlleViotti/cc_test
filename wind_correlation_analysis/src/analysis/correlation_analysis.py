@@ -16,7 +16,6 @@ from .spatial_utils import (
     NormalizationUtils
 )
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

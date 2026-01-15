@@ -3,7 +3,7 @@ Spatial utility functions for wind farm correlation analysis
 """
 
 import numpy as np
-from typing import Tuple
+from typing import Optional, Tuple, Union
 import pandas as pd
 
 
@@ -96,6 +96,9 @@ class SpatialCalculations:
 
         return bearing_deg
 
+    # Alias for consistency with other method names
+    calculate_bearing = bearing
+
     @staticmethod
     def calculate_station_pairs(
         stations: pd.DataFrame
@@ -149,7 +152,7 @@ class CircularStatistics:
     """
 
     @staticmethod
-    def circular_mean(angles: np.ndarray, weights: np.ndarray = None) -> float:
+    def circular_mean(angles: np.ndarray, weights: Optional[np.ndarray] = None) -> float:
         """
         Calculate circular mean of angles
 
@@ -226,11 +229,11 @@ class CircularStatistics:
 
         R = np.sqrt(sin_sum**2 + cos_sum**2) / len(angles)
 
-        # Circular standard deviation
-        circular_var = 1 - R
-        circular_std = np.sqrt(-2 * np.log(R)) if R > 0 else 0
+        # Circular standard deviation (based on mean resultant length)
+        # Note: circular variance would be (1 - R)
+        std_rad = np.sqrt(-2 * np.log(R)) if R > 0 else 0.0
 
-        return np.degrees(circular_std)
+        return np.degrees(std_rad)
 
 
 class NormalizationUtils:

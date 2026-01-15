@@ -11,12 +11,15 @@ This script orchestrates the complete analysis:
 """
 
 import sys
-import yaml
-import logging
-from pathlib import Path
-from datetime import datetime, timedelta
-import pandas as pd
 import argparse
+import logging
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, Optional
+
+import numpy as np
+import pandas as pd
+import yaml
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent / 'src'))
@@ -65,7 +68,7 @@ class WindCorrelationPipeline:
         self.stations = pd.DataFrame(self.config['stations'])
         logger.info(f"Loaded {len(self.stations)} stations from config")
 
-    def step1_download_metar_data(self, start_date: datetime, end_date: datetime) -> dict:
+    def step1_download_metar_data(self, start_date: datetime, end_date: datetime) -> Dict[str, pd.DataFrame]:
         """
         Step 1: Download METAR wind speed data
 
@@ -98,7 +101,7 @@ class WindCorrelationPipeline:
         start_date: datetime,
         end_date: datetime,
         download_new: bool = True
-    ) -> str:
+    ) -> Optional[str]:
         """
         Step 2: Download ERA5 data
 
@@ -137,7 +140,7 @@ class WindCorrelationPipeline:
             logger.info("Skipping ERA5 download (using existing data)")
             return None
 
-    def step3_process_era5_data(self, era5_file: str = None) -> dict:
+    def step3_process_era5_data(self, era5_file: Optional[str] = None) -> Dict[str, pd.DataFrame]:
         """
         Step 3: Process ERA5 data and extract station time series
 
@@ -176,7 +179,7 @@ class WindCorrelationPipeline:
             logger.warning("No ERA5 file available. Generating synthetic data for demonstration.")
             return self._generate_synthetic_era5_data()
 
-    def _generate_synthetic_era5_data(self) -> dict:
+    def _generate_synthetic_era5_data(self) -> Dict[str, pd.DataFrame]:
         """
         Generate synthetic ERA5 data for demonstration purposes
 
@@ -248,10 +251,10 @@ class WindCorrelationPipeline:
 
     def step5_perform_correlation_analysis(
         self,
-        wind_data: dict,
-        era5_data: dict,
+        wind_data: Dict[str, pd.DataFrame],
+        era5_data: Dict[str, pd.DataFrame],
         station_pairs: pd.DataFrame
-    ) -> dict:
+    ) -> Dict[tuple, pd.DataFrame]:
         """
         Step 5: Perform cross-correlation analysis
 
@@ -294,9 +297,9 @@ class WindCorrelationPipeline:
 
     def step6_create_visualizations(
         self,
-        results: dict,
+        results: Dict[tuple, pd.DataFrame],
         station_pairs: pd.DataFrame
-    ):
+    ) -> None:
         """
         Step 6: Create polar plots and visualizations
 
@@ -352,7 +355,7 @@ class WindCorrelationPipeline:
         start_date: datetime,
         end_date: datetime,
         download_era5: bool = False
-    ):
+    ) -> None:
         """
         Run the complete analysis pipeline
 
@@ -451,5 +454,4 @@ def main():
 
 
 if __name__ == "__main__":
-    import numpy as np  # Import here for synthetic data generation
     main()

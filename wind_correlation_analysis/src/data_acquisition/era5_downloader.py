@@ -15,7 +15,6 @@ import logging
 import hashlib
 import json
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

@@ -3,15 +3,16 @@ METAR data downloader for Swedish stations
 Uses Iowa State ASOS/METAR archive
 """
 
+import numpy as np
 import pandas as pd
 import requests
 from datetime import datetime, timedelta
+from io import StringIO
 from typing import List, Dict, Optional
 import time
 from pathlib import Path
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -19,6 +20,7 @@ class METARDownloader:
     """Download and process METAR data from Iowa State archive"""
 
     BASE_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
+    KNOTS_TO_MS = 0.514444  # Conversion factor from knots to m/s
 
     def __init__(self, output_dir: str = "data/raw/metar"):
         self.output_dir = Path(output_dir)
@@ -75,7 +77,6 @@ class METARDownloader:
                 response.raise_for_status()
 
                 # Parse CSV data
-                from io import StringIO
                 df = pd.read_csv(StringIO(response.text), parse_dates=['valid'])
 
                 if df.empty:
@@ -90,7 +91,7 @@ class METARDownloader:
                 })
 
                 # Convert wind speed from knots to m/s
-                df['wind_speed_ms'] = df['wind_speed_knots'] * 0.514444
+                df['wind_speed_ms'] = df['wind_speed_knots'] * self.KNOTS_TO_MS
 
                 # Select relevant columns
                 cols = ['timestamp', 'wind_speed_ms', 'wind_direction', 'lat', 'lon']
@@ -132,26 +133,25 @@ class METARDownloader:
         df_resampled = pd.DataFrame()
 
         # Wind speed - simple mean
-        df_resampled['wind_speed_ms'] = df['wind_speed_ms'].resample('5T').mean()
+        df_resampled['wind_speed_ms'] = df['wind_speed_ms'].resample('5min').mean()
 
         # Wind direction - circular mean
         # Convert to radians, then to u and v components
-        wind_dir_rad = df['wind_direction'] * (3.14159265359 / 180)
-        u = -df['wind_speed_ms'] * pd.Series(wind_dir_rad).apply(lambda x: pd.np.sin(x) if hasattr(pd, 'np') else __import__('numpy').sin(x))
-        v = -df['wind_speed_ms'] * pd.Series(wind_dir_rad).apply(lambda x: pd.np.cos(x) if hasattr(pd, 'np') else __import__('numpy').cos(x))
+        wind_dir_rad = np.radians(df['wind_direction'])
+        u = -df['wind_speed_ms'] * np.sin(wind_dir_rad)
+        v = -df['wind_speed_ms'] * np.cos(wind_dir_rad)
 
         # Resample u and v components
-        u_mean = u.resample('5T').mean()
-        v_mean = v.resample('5T').mean()
+        u_mean = u.resample('5min').mean()
+        v_mean = v.resample('5min').mean()
 
         # Convert back to direction
-        import numpy as np
-        df_resampled['wind_direction'] = (np.arctan2(u_mean, v_mean) * 180 / np.pi + 180) % 360
+        df_resampled['wind_direction'] = (np.degrees(np.arctan2(u_mean, v_mean)) + 180) % 360
 
         # Keep lat/lon (first value)
         if 'lat' in df.columns:
-            df_resampled['lat'] = df['lat'].resample('5T').first()
-            df_resampled['lon'] = df['lon'].resample('5T').first()
+            df_resampled['lat'] = df['lat'].resample('5min').first()
+            df_resampled['lon'] = df['lon'].resample('5min').first()
 
         # Remove NaN values
         df_resampled = df_resampled.dropna()
