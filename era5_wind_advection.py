@@ -31,11 +31,14 @@ from wind_correlation_analysis.src.data_acquisition.era5_downloader import ERA5D
 METERS_PER_DEGREE_LAT = 111000  # Approximate meters per degree latitude
 
 # Cross-correlation parameters
-CROSSCORR_WINDOW_SIZE = 32  # Window size for local cross-correlation
+CROSSCORR_WINDOW_SIZE = 32  # Default window size for local cross-correlation (grid points)
+CROSSCORR_WINDOW_KM = 150  # Physical size of correlation window in km (for dynamic sizing)
+CROSSCORR_MIN_WINDOW = 8  # Minimum window size in grid points
+CROSSCORR_MAX_WINDOW = 64  # Maximum window size in grid points
 CROSSCORR_STD_THRESHOLD = 1e-6  # Minimum std dev to compute correlation
 
 # Optical flow parameters
-OPTICAL_FLOW_ALPHA = 0.1  # Regularization parameter for optical flow
+OPTICAL_FLOW_ALPHA_BASE = 0.1  # Base regularization parameter for optical flow
 OPTICAL_FLOW_GRADIENT_EPSILON = 1e-10  # Avoid division by zero
 OPTICAL_FLOW_SMOOTH_SIGMA = 2  # Gaussian smoothing sigma for optical flow
 
@@ -137,7 +140,8 @@ def compute_advection_velocity_crosscorr(
     dx: float,
     dy: float,
     dt: float,
-    max_displacement: int = 20
+    max_displacement: int = 20,
+    grid_spacing_km: Optional[float] = None
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute advection velocity using cross-correlation method.
@@ -159,6 +163,11 @@ def compute_advection_velocity_crosscorr(
         Time difference between fields (seconds)
     max_displacement : int, optional
         Maximum displacement to search in grid points (default: 20)
+    grid_spacing_km : float, optional
+        Grid spacing in kilometers. If provided, window size is dynamically
+        calculated to span approximately CROSSCORR_WINDOW_KM (150 km).
+        This ensures consistent physical coverage across different grid
+        resolutions. If None, uses the default CROSSCORR_WINDOW_SIZE.
 
     Returns
     -------
@@ -177,8 +186,17 @@ def compute_advection_velocity_crosscorr(
     u_advection = np.full((ny, nx), np.nan)
     v_advection = np.full((ny, nx), np.nan)
 
-    # Window size for local cross-correlation
-    window_size = CROSSCORR_WINDOW_SIZE
+    # Calculate window size based on physical distance if grid spacing provided
+    if grid_spacing_km is not None and grid_spacing_km > 0:
+        # Calculate window size to span approximately CROSSCORR_WINDOW_KM
+        window_size = int(CROSSCORR_WINDOW_KM / grid_spacing_km)
+        # Clamp to reasonable bounds
+        window_size = max(CROSSCORR_MIN_WINDOW, min(CROSSCORR_MAX_WINDOW, window_size))
+        # Ensure even number for symmetric windows
+        window_size = window_size + (window_size % 2)
+    else:
+        window_size = CROSSCORR_WINDOW_SIZE
+
     half_window = window_size // 2
 
     # Stride should be smaller than window size for coverage
@@ -253,7 +271,8 @@ def compute_advection_velocity_optical_flow(
     field2: np.ndarray,
     dx: float,
     dy: float,
-    dt: float
+    dt: float,
+    adaptive_alpha: bool = True
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Compute advection velocity using optical flow method (gradient-based).
@@ -273,6 +292,11 @@ def compute_advection_velocity_optical_flow(
         Grid spacing in y direction (meters or degrees)
     dt : float
         Time difference between fields (seconds)
+    adaptive_alpha : bool, optional
+        If True, use adaptive regularization that scales with local gradient
+        strength. Strong gradients get less regularization (more trust in
+        gradient), weak gradients get more (prevent noise amplification).
+        Default is True.
 
     Returns
     -------
@@ -293,19 +317,34 @@ def compute_advection_velocity_optical_flow(
     # Compute spatial gradients using central differences
     dI_dy, dI_dx = np.gradient(field1, dy, dx)
 
-    # Solve for advection velocity using least squares
-    # This is a simplified version; more sophisticated methods exist
-
-    # Avoid division by zero
+    # Compute gradient magnitude squared
     grad_mag_sq = dI_dx**2 + dI_dy**2
 
-    # Lucas-Kanade style solution
+    # Lucas-Kanade style solution with regularization
     # We need to solve: dI/dt + u*dI/dx + v*dI/dy = 0
-    # This is one equation with two unknowns, so we use local averaging
+    # This is one equation with two unknowns, so we use regularization
 
-    # For simplicity, use a regularized least-squares approach
-    u_advection = -(dI_dt * dI_dx) / (grad_mag_sq + OPTICAL_FLOW_ALPHA)
-    v_advection = -(dI_dt * dI_dy) / (grad_mag_sq + OPTICAL_FLOW_ALPHA)
+    if adaptive_alpha:
+        # Adaptive regularization: scale alpha inversely with gradient strength
+        # Strong gradients get less regularization (more trust in gradient)
+        # Weak gradients get more regularization (prevent noise amplification)
+        valid_grads = grad_mag_sq[grad_mag_sq > OPTICAL_FLOW_GRADIENT_EPSILON]
+        if len(valid_grads) > 0:
+            grad_percentile_90 = np.percentile(valid_grads, 90)
+        else:
+            grad_percentile_90 = 1.0
+
+        # Alpha scales up where gradients are weak relative to strong regions
+        alpha = OPTICAL_FLOW_ALPHA_BASE * (
+            1 + grad_percentile_90 / (grad_mag_sq + OPTICAL_FLOW_GRADIENT_EPSILON)
+        )
+    else:
+        # Fixed regularization
+        alpha = OPTICAL_FLOW_ALPHA_BASE
+
+    # Compute advection velocities
+    u_advection = -(dI_dt * dI_dx) / (grad_mag_sq + alpha)
+    v_advection = -(dI_dt * dI_dy) / (grad_mag_sq + alpha)
 
     # Smooth the result
     u_advection = gaussian_filter(u_advection, sigma=OPTICAL_FLOW_SMOOTH_SIGMA)

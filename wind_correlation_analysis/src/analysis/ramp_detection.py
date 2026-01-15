@@ -20,28 +20,41 @@ class RampDetector:
 
     A ramp is defined as a rapid change in wind speed over a specified time window.
     Both positive ramps (increases) and negative ramps (decreases) are detected.
+
+    Default parameters use "research" preset values optimized for comprehensive
+    detection of all notable wind speed changes. For operational use cases,
+    consider adjusting thresholds:
+    - Grid operations: magnitude=4.0, rate=4.0 (detect significant power changes)
+    - Short-term forecast: magnitude=2.0, rate=3.0 (detect smaller, faster changes)
+    - Offshore: magnitude=5.0, rate=5.0 (higher wind speeds, larger ramps)
     """
 
     def __init__(
         self,
-        time_window_hours: float = 1.0,
-        magnitude_threshold_ms: float = 4.0,
-        rate_threshold_ms_per_hour: float = 4.0,
-        smooth_sigma: float = 1.0
+        time_window_hours: float = 2.0,
+        magnitude_threshold_ms: float = 2.5,
+        rate_threshold_ms_per_hour: float = 1.5,
+        smooth_sigma: float = 1.5
     ):
         """
         Initialize ramp detector.
 
+        Default values use "research" preset for comprehensive ramp detection.
+
         Parameters:
         -----------
         time_window_hours : float
-            Time window for computing wind speed changes (hours)
+            Time window for computing wind speed changes (hours).
+            Default: 2.0 (research preset, catches slower ramps)
         magnitude_threshold_ms : float
-            Minimum change in wind speed to be considered a ramp (m/s)
+            Minimum change in wind speed to be considered a ramp (m/s).
+            Default: 2.5 (research preset, more sensitive)
         rate_threshold_ms_per_hour : float
-            Minimum rate of change to be considered a ramp (m/s per hour)
+            Minimum rate of change to be considered a ramp (m/s per hour).
+            Default: 1.5 (research preset, catches gradual ramps)
         smooth_sigma : float
-            Sigma for Gaussian smoothing of time series (0 = no smoothing)
+            Sigma for Gaussian smoothing of time series (0 = no smoothing).
+            Default: 1.5 (research preset, moderate smoothing)
         """
         self.time_window_hours = time_window_hours
         self.magnitude_threshold = magnitude_threshold_ms
