@@ -11,7 +11,6 @@ from typing import Dict, List, Tuple, Optional
 from scipy.ndimage import gaussian_filter1d
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -120,23 +119,39 @@ class RampDetector:
 
         # Find contiguous ramp periods
         for direction, mask in [('up', positive_mask), ('down', negative_mask)]:
+            mask_array = mask.values if hasattr(mask, 'values') else np.asarray(mask)
+
+            # Handle case where there are no True values
+            if not np.any(mask_array):
+                continue
+
             # Find where mask changes from False to True (ramp start)
             # and from True to False (ramp end)
-            mask_diff = np.diff(mask.astype(int))
-            starts = np.where(mask_diff == 1)[0] + 1
+            mask_diff = np.diff(mask_array.astype(int))
+            starts = np.where(mask_diff == 1)[0] + 1  # +1 because diff shifts indices
             ends = np.where(mask_diff == -1)[0] + 1
 
-            # Handle edge cases
-            if len(starts) == 0 and len(ends) == 0:
-                continue
-            if len(starts) > 0 and (len(ends) == 0 or starts[0] < ends[0]):
-                ends = np.append(ends, len(mask) - 1)
-            if len(ends) > 0 and (len(starts) == 0 or ends[0] < starts[0]):
+            # Handle edge cases for mask starting or ending with True
+            # If mask starts with True, the first ramp starts at index 0
+            if mask_array[0]:
                 starts = np.insert(starts, 0, 0)
+            # If mask ends with True, the last ramp ends at the final index
+            if mask_array[-1]:
+                ends = np.append(ends, len(mask_array))
+
+            # Ensure starts and ends are properly paired
+            if len(starts) != len(ends):
+                logger.warning(f"Mismatched ramp starts ({len(starts)}) and ends ({len(ends)})")
+                # Take minimum to avoid index errors
+                n_pairs = min(len(starts), len(ends))
+                starts = starts[:n_pairs]
+                ends = ends[:n_pairs]
 
             # Process each ramp
             for start_idx, end_idx in zip(starts, ends):
-                if start_idx >= len(ws.index) or end_idx >= len(ws.index):
+                # Ensure indices are within bounds
+                end_idx = min(end_idx, len(ws.index) - 1)
+                if start_idx >= len(ws.index) or start_idx >= end_idx:
                     continue
 
                 ramp_start = ws.index[start_idx]

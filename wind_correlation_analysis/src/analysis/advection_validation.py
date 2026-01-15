@@ -14,7 +14,6 @@ from matplotlib.gridspec import GridSpec
 from scipy.stats import pearsonr, spearmanr
 import logging
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 

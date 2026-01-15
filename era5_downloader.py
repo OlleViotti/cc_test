@@ -1,21 +1,37 @@
 """
-ERA5 Data Downloader Module
+ERA5 Data Downloader Module (Legacy)
+
+.. deprecated::
+    This module is deprecated. For new code, use the unified downloader:
+    ``from wind_correlation_analysis.src.data_acquisition.era5_downloader import ERA5Downloader``
+
+    The unified downloader provides:
+    - Intelligent caching to avoid duplicate downloads
+    - Support for both pressure-level and single-level datasets
+    - Geostrophic wind calculation
+    - Station time series extraction
 
 This module provides functionality to download ERA5 reanalysis data from the
 Copernicus Climate Data Store (CDS) using the CDS API.
 """
 
+import warnings
 import cdsapi
 import os
 from datetime import datetime
 from typing import List, Dict, Optional, Union
 import logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+# Issue deprecation warning when module is imported
+warnings.warn(
+    "era5_downloader.py is deprecated. Use "
+    "wind_correlation_analysis.src.data_acquisition.era5_downloader.ERA5Downloader instead.",
+    DeprecationWarning,
+    stacklevel=2
 )
+
+# Note: Logging should be configured by the application, not the library module.
+# Users can configure logging as needed in their application.
 logger = logging.getLogger(__name__)
 
 

@@ -6,20 +6,41 @@ This module provides functions to:
 2. Compute advection velocity from wind pattern movement
 """
 
-import sys
 import os
+import shutil
+import sys
+import warnings
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional, Tuple
+
+import numpy as np
+import xarray as xr
+from scipy import signal
+from scipy.ndimage import distance_transform_edt, gaussian_filter, shift
 
 # Add the wind_correlation_analysis package to the path if needed
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'wind_correlation_analysis'))
 
 from wind_correlation_analysis.src.data_acquisition.era5_downloader import ERA5Downloader
-import xarray as xr
-import numpy as np
-from scipy import signal
-from scipy.ndimage import shift, gaussian_filter
-from typing import Tuple, Dict, Optional, List
-from datetime import datetime, timedelta
-import warnings
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+# Geographic constants
+METERS_PER_DEGREE_LAT = 111000  # Approximate meters per degree latitude
+
+# Cross-correlation parameters
+CROSSCORR_WINDOW_SIZE = 32  # Window size for local cross-correlation
+CROSSCORR_STD_THRESHOLD = 1e-6  # Minimum std dev to compute correlation
+
+# Optical flow parameters
+OPTICAL_FLOW_ALPHA = 0.1  # Regularization parameter for optical flow
+OPTICAL_FLOW_GRADIENT_EPSILON = 1e-10  # Avoid division by zero
+OPTICAL_FLOW_SMOOTH_SIGMA = 2  # Gaussian smoothing sigma for optical flow
+
+# Temporal difference method parameters
+BOUNDARY_MASK_PIXELS = 5  # Pixels to mask near domain boundaries
 
 
 def download_era5_wind_grid(
@@ -85,7 +106,6 @@ def download_era5_wind_grid(
 
     # Rename to the requested output file if different
     if downloaded_file != output_file:
-        import shutil
         shutil.move(downloaded_file, output_file)
         print(f"Renamed to: {output_file}")
 
@@ -158,7 +178,7 @@ def compute_advection_velocity_crosscorr(
     v_advection = np.full((ny, nx), np.nan)
 
     # Window size for local cross-correlation
-    window_size = 32
+    window_size = CROSSCORR_WINDOW_SIZE
     half_window = window_size // 2
 
     # Stride should be smaller than window size for coverage
@@ -172,7 +192,7 @@ def compute_advection_velocity_crosscorr(
                             j-half_window:j+half_window]
 
             # Skip if window has no variation
-            if window1.std() < 1e-6:
+            if window1.std() < CROSSCORR_STD_THRESHOLD:
                 continue
 
             # Search for best match in field2
@@ -195,7 +215,7 @@ def compute_advection_velocity_crosscorr(
                         window2 = field2[i2_start:i2_end, j2_start:j2_end]
 
                         # Compute normalized cross-correlation
-                        if window2.std() > 1e-6:
+                        if window2.std() > CROSSCORR_STD_THRESHOLD:
                             corr = np.corrcoef(window1.flatten(),
                                              window2.flatten())[0, 1]
 
@@ -219,8 +239,6 @@ def compute_advection_velocity_crosscorr(
             v_advection[i_start:i_end, j_start:j_end] = v_adv
 
     # Fill any remaining NaN values with nearest neighbor interpolation
-    from scipy.ndimage import distance_transform_edt
-
     for arr in [u_advection, v_advection]:
         mask = np.isnan(arr)
         if mask.any():
@@ -280,22 +298,18 @@ def compute_advection_velocity_optical_flow(
 
     # Avoid division by zero
     grad_mag_sq = dI_dx**2 + dI_dy**2
-    epsilon = 1e-10
 
     # Lucas-Kanade style solution
     # We need to solve: dI/dt + u*dI/dx + v*dI/dy = 0
     # This is one equation with two unknowns, so we use local averaging
 
     # For simplicity, use a regularized least-squares approach
-    alpha = 0.1  # Regularization parameter
-
-    u_advection = -(dI_dt * dI_dx) / (grad_mag_sq + alpha)
-    v_advection = -(dI_dt * dI_dy) / (grad_mag_sq + alpha)
+    u_advection = -(dI_dt * dI_dx) / (grad_mag_sq + OPTICAL_FLOW_ALPHA)
+    v_advection = -(dI_dt * dI_dy) / (grad_mag_sq + OPTICAL_FLOW_ALPHA)
 
     # Smooth the result
-    from scipy.ndimage import gaussian_filter
-    u_advection = gaussian_filter(u_advection, sigma=2)
-    v_advection = gaussian_filter(v_advection, sigma=2)
+    u_advection = gaussian_filter(u_advection, sigma=OPTICAL_FLOW_SMOOTH_SIGMA)
+    v_advection = gaussian_filter(v_advection, sigma=OPTICAL_FLOW_SMOOTH_SIGMA)
 
     return u_advection, v_advection
 
@@ -528,12 +542,12 @@ def compute_advection_velocity_temporal_difference(
     # 2. Gradients are strong (edge_mask)
     # 3. Not near domain boundaries
 
-    # Mask regions near domain boundaries (5 pixels)
+    # Mask regions near domain boundaries
     boundary_mask = np.ones_like(ramp_mask, dtype=bool)
-    boundary_mask[:5, :] = False
-    boundary_mask[-5:, :] = False
-    boundary_mask[:, :5] = False
-    boundary_mask[:, -5:] = False
+    boundary_mask[:BOUNDARY_MASK_PIXELS, :] = False
+    boundary_mask[-BOUNDARY_MASK_PIXELS:, :] = False
+    boundary_mask[:, :BOUNDARY_MASK_PIXELS] = False
+    boundary_mask[:, -BOUNDARY_MASK_PIXELS:] = False
 
     # Combined validity mask
     valid_mask = ramp_mask & edge_mask & boundary_mask
@@ -704,10 +718,9 @@ def compute_advection_grid_from_era5(
 
     # Convert to meters approximately (at mid-latitude)
     mid_lat = np.mean(lat)
-    meters_per_degree_lat = 111000  # approximately
-    meters_per_degree_lon = 111000 * np.cos(np.radians(mid_lat))
+    meters_per_degree_lon = METERS_PER_DEGREE_LAT * np.cos(np.radians(mid_lat))
 
-    dy_meters = dy * meters_per_degree_lat
+    dy_meters = dy * METERS_PER_DEGREE_LAT
     dx_meters = dx * meters_per_degree_lon
 
     print(f"Grid spacing: {dx:.3f}° lon ({dx_meters:.0f} m), {dy:.3f}° lat ({dy_meters:.0f} m)")
