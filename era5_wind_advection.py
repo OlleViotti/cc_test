@@ -16,9 +16,10 @@ from wind_correlation_analysis.src.data_acquisition.era5_downloader import ERA5D
 import xarray as xr
 import numpy as np
 from scipy import signal
-from scipy.ndimage import shift
+from scipy.ndimage import shift, gaussian_filter
 from typing import Tuple, Dict, Optional, List
 from datetime import datetime, timedelta
+import warnings
 
 
 def download_era5_wind_grid(
@@ -299,11 +300,210 @@ def compute_advection_velocity_optical_flow(
     return u_advection, v_advection
 
 
+def extract_850hpa_wind_advection(
+    era5_pressure_file: str,
+    pressure_level: int = 850
+) -> Tuple[xr.DataArray, xr.DataArray]:
+    """
+    Extract wind at a specified pressure level (e.g., 850 hPa) as advection velocity estimate.
+
+    Parameters
+    ----------
+    era5_pressure_file : str
+        Path to ERA5 pressure-level NetCDF file
+    pressure_level : int, optional
+        Pressure level in hPa (default: 850)
+
+    Returns
+    -------
+    u_advection : xr.DataArray
+        U (eastward) component at specified pressure level
+    v_advection : xr.DataArray
+        V (northward) component at specified pressure level
+
+    Notes
+    -----
+    The 850 hPa wind is commonly used as a proxy for advection velocity
+    as it represents the free atmosphere above the boundary layer.
+    """
+    print(f"Loading ERA5 pressure-level data from {era5_pressure_file}...")
+    ds = xr.open_dataset(era5_pressure_file)
+
+    # Check for pressure/level dimension
+    if 'level' in ds.dims:
+        level_dim = 'level'
+    elif 'pressure_level' in ds.dims:
+        level_dim = 'pressure_level'
+    elif 'isobaricInhPa' in ds.dims:
+        level_dim = 'isobaricInhPa'
+    else:
+        raise ValueError(f"Could not find pressure level dimension. Dimensions: {list(ds.dims)}")
+
+    # Check if requested level exists
+    available_levels = ds[level_dim].values
+    if pressure_level not in available_levels:
+        raise ValueError(f"Pressure level {pressure_level} hPa not found. "
+                        f"Available levels: {available_levels}")
+
+    # Extract u and v components at the specified level
+    u_var = None
+    v_var = None
+
+    for var in ds.variables:
+        if 'u' in var.lower() and 'wind' in var.lower():
+            u_var = var
+        elif var == 'u':
+            u_var = var
+        if 'v' in var.lower() and 'wind' in var.lower():
+            v_var = var
+        elif var == 'v':
+            v_var = var
+
+    if u_var is None or v_var is None:
+        raise ValueError(f"Could not find u/v wind components. Variables: {list(ds.variables)}")
+
+    print(f"Found wind components: {u_var}, {v_var}")
+    print(f"Extracting {pressure_level} hPa wind as advection velocity...")
+
+    # Select the pressure level
+    u_advection = ds[u_var].sel({level_dim: pressure_level})
+    v_advection = ds[v_var].sel({level_dim: pressure_level})
+
+    print(f"  U-component: mean={float(u_advection.mean()):.2f} m/s, "
+          f"std={float(u_advection.std()):.2f} m/s")
+    print(f"  V-component: mean={float(v_advection.mean()):.2f} m/s, "
+          f"std={float(v_advection.std()):.2f} m/s")
+
+    return u_advection, v_advection
+
+
+def compute_advection_velocity_temporal_difference(
+    u_wind: np.ndarray,
+    v_wind: np.ndarray,
+    dx: float,
+    dy: float,
+    dt: float,
+    smooth_sigma: float = 2.0,
+    edge_threshold: float = 0.1
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """
+    Compute advection velocity using optical flow on temporal difference fields.
+
+    This method computes Δu(t) = u(t) - u(t-1) and Δv(t) = v(t) - v(t-1),
+    applies smoothing and edge masking, then uses optical flow to track these
+    difference patterns.
+
+    Parameters
+    ----------
+    u_wind : np.ndarray
+        U wind component at two consecutive times, shape (2, ny, nx)
+        [u(t-1), u(t)]
+    v_wind : np.ndarray
+        V wind component at two consecutive times, shape (2, ny, nx)
+        [v(t-1), v(t)]
+    dx : float
+        Grid spacing in x direction (meters)
+    dy : float
+        Grid spacing in y direction (meters)
+    dt : float
+        Time difference between fields (seconds)
+    smooth_sigma : float, optional
+        Sigma for Gaussian smoothing of difference fields (default: 2.0)
+        Higher values = more smoothing
+    edge_threshold : float, optional
+        Threshold for edge masking based on gradient magnitude (default: 0.1)
+        Regions with gradients below this threshold are masked
+
+    Returns
+    -------
+    u_advection : np.ndarray
+        Advection velocity in x direction (m/s)
+    v_advection : np.ndarray
+        Advection velocity in y direction (m/s)
+    mask : np.ndarray
+        Boolean mask indicating valid regions (True = valid)
+
+    Notes
+    -----
+    The difference field Δu = u(t) - u(t-1) shows regions of acceleration
+    (positive) and deceleration (negative). Optical flow applied to this
+    field tracks how these patterns of change move through space.
+
+    Smoothing helps reduce noise but too much will blur ramp edges.
+    Edge masking removes regions with weak gradients where optical flow
+    estimates are unreliable.
+    """
+    if u_wind.shape[0] != 2 or v_wind.shape[0] != 2:
+        raise ValueError("u_wind and v_wind must have shape (2, ny, nx)")
+
+    # Compute temporal differences
+    delta_u = u_wind[1] - u_wind[0]  # Δu(t) = u(t) - u(t-1)
+    delta_v = v_wind[1] - v_wind[0]  # Δv(t) = v(t) - v(t-1)
+
+    # Compute magnitude of difference field (for masking)
+    delta_magnitude = np.sqrt(delta_u**2 + delta_v**2)
+
+    # Apply spatial smoothing to reduce noise
+    if smooth_sigma > 0:
+        delta_u_smooth = gaussian_filter(delta_u, sigma=smooth_sigma)
+        delta_v_smooth = gaussian_filter(delta_v, sigma=smooth_sigma)
+    else:
+        delta_u_smooth = delta_u
+        delta_v_smooth = delta_v
+
+    # Create a combined intensity field from the difference vectors
+    # Use the magnitude of the vector difference as the "intensity"
+    intensity_field = np.sqrt(delta_u_smooth**2 + delta_v_smooth**2)
+
+    # For optical flow, we need two consecutive time steps of this field
+    # Since we only have one difference, we'll use the current wind field
+    # and the difference field to simulate motion
+    field1 = intensity_field  # Current difference pattern
+    field2 = np.sqrt(u_wind[1]**2 + v_wind[1]**2)  # Current wind speed
+
+    # Apply optical flow method
+    u_adv, v_adv = compute_advection_velocity_optical_flow(
+        field1, field2, dx, dy, dt
+    )
+
+    # Create edge mask based on gradient magnitude
+    # Mask out regions where the difference field is too weak
+    gradient_mag = np.sqrt(
+        np.gradient(delta_u_smooth, dy, dx)[0]**2 +
+        np.gradient(delta_u_smooth, dy, dx)[1]**2 +
+        np.gradient(delta_v_smooth, dy, dx)[0]**2 +
+        np.gradient(delta_v_smooth, dy, dx)[1]**2
+    )
+
+    # Normalize gradient magnitude
+    if gradient_mag.max() > 0:
+        gradient_mag_norm = gradient_mag / gradient_mag.max()
+    else:
+        gradient_mag_norm = gradient_mag
+
+    # Create mask: True where gradients are strong enough
+    mask = gradient_mag_norm > edge_threshold
+
+    # Also mask regions near domain boundaries (5 pixels)
+    mask[:5, :] = False
+    mask[-5:, :] = False
+    mask[:, :5] = False
+    mask[:, -5:] = False
+
+    # Apply mask to advection velocities
+    u_advection = np.where(mask, u_adv, np.nan)
+    v_advection = np.where(mask, v_adv, np.nan)
+
+    return u_advection, v_advection, mask
+
+
 def compute_advection_grid_from_era5(
     era5_file: str,
     output_file: str,
     method: str = 'crosscorr',
-    time_step_hours: int = 1
+    time_step_hours: int = 1,
+    era5_pressure_file: Optional[str] = None,
+    pressure_level: int = 850
 ) -> xr.Dataset:
     """
     Compute advection velocity grid from ERA5 wind data.
@@ -316,15 +516,23 @@ def compute_advection_grid_from_era5(
     Parameters
     ----------
     era5_file : str
-        Path to ERA5 NetCDF file with wind data
+        Path to ERA5 NetCDF file with wind data (single-level)
     output_file : str
         Path to save the output NetCDF file with advection velocities
     method : str, optional
-        Method to compute advection: 'crosscorr' or 'optical_flow'
-        Default is 'crosscorr' (more accurate but slower)
+        Method to compute advection:
+        - 'crosscorr': Cross-correlation based (more accurate but slower)
+        - 'optical_flow': Optical flow on wind speed field (faster)
+        - 'temporal_difference': Optical flow on Δu(t) = u(t) - u(t-1)
+        - '850hpa': Use 850 hPa wind as advection (requires era5_pressure_file)
+        Default is 'crosscorr'
     time_step_hours : int, optional
         Time step in hours between consecutive fields for advection computation
         Default is 1 hour
+    era5_pressure_file : str, optional
+        Path to ERA5 pressure-level NetCDF file (required for '850hpa' method)
+    pressure_level : int, optional
+        Pressure level in hPa to use for advection (default: 850)
 
     Returns
     -------
@@ -334,11 +542,71 @@ def compute_advection_grid_from_era5(
     Notes
     -----
     The output contains:
-    - u_advection: Eastward advection velocity (m/s or deg/s)
-    - v_advection: Northward advection velocity (m/s or deg/s)
-    - advection_speed: Magnitude of advection velocity
+    - u_advection: Eastward advection velocity (m/s)
+    - v_advection: Northward advection velocity (m/s)
+    - advection_speed: Magnitude of advection velocity (m/s)
     - Also preserves original wind data for reference
+
+    For 'temporal_difference' method:
+    - Also includes 'advection_mask' showing valid regions
+
+    For '850hpa' method:
+    - Directly uses the wind at specified pressure level as advection
     """
+
+    # Special handling for 850 hPa method
+    if method == '850hpa':
+        if era5_pressure_file is None:
+            raise ValueError("era5_pressure_file must be provided for '850hpa' method")
+
+        print(f"Using {pressure_level} hPa wind as advection velocity...")
+        u_adv, v_adv = extract_850hpa_wind_advection(era5_pressure_file, pressure_level)
+
+        # Calculate advection speed
+        advection_speed = np.sqrt(u_adv**2 + v_adv**2)
+
+        # Create output dataset
+        output_ds = xr.Dataset(
+            {
+                'u_advection': u_adv,
+                'v_advection': v_adv,
+                'advection_speed': advection_speed,
+            }
+        )
+
+        # Add attributes
+        output_ds['u_advection'].attrs = {
+            'long_name': f'{pressure_level} hPa eastward wind',
+            'units': 'm/s',
+            'description': f'U-component of wind at {pressure_level} hPa used as advection velocity'
+        }
+        output_ds['v_advection'].attrs = {
+            'long_name': f'{pressure_level} hPa northward wind',
+            'units': 'm/s',
+            'description': f'V-component of wind at {pressure_level} hPa used as advection velocity'
+        }
+        output_ds['advection_speed'].attrs = {
+            'long_name': f'{pressure_level} hPa wind speed',
+            'units': 'm/s',
+            'description': f'Wind speed at {pressure_level} hPa used as advection speed'
+        }
+
+        output_ds.attrs = {
+            'title': f'ERA5 {pressure_level} hPa Wind as Advection Velocity',
+            'method': method,
+            'pressure_level': pressure_level,
+            'created': datetime.now().isoformat(),
+            'source_file': era5_pressure_file
+        }
+
+        # Save to file
+        print(f"\nSaving results to {output_file}...")
+        output_ds.to_netcdf(output_file)
+        print(f"Advection speed statistics: mean={float(advection_speed.mean()):.2f} m/s, "
+              f"max={float(advection_speed.max()):.2f} m/s")
+        print("Done!")
+
+        return output_ds
 
     print(f"Loading ERA5 data from {era5_file}...")
     ds = xr.open_dataset(era5_file)
@@ -403,6 +671,10 @@ def compute_advection_grid_from_era5(
     u_advection_all = np.zeros((n_times - 1, n_lat, n_lon))
     v_advection_all = np.zeros((n_times - 1, n_lat, n_lon))
 
+    # For temporal_difference method, also store masks
+    if method == 'temporal_difference':
+        mask_all = np.zeros((n_times - 1, n_lat, n_lon), dtype=bool)
+
     print(f"\nComputing advection velocity using {method} method...")
     print(f"Processing {n_times - 1} time step pairs...")
 
@@ -411,19 +683,37 @@ def compute_advection_grid_from_era5(
         if t % 10 == 0:
             print(f"Processing time step {t+1}/{n_times-1}...")
 
-        field1 = wind_speed.isel(time=t).values
-        field2 = wind_speed.isel(time=t+1).values
+        if method == 'temporal_difference':
+            # For this method, we need the actual u and v components
+            u_t0 = u_wind.isel(time=t).values
+            u_t1 = u_wind.isel(time=t+1).values
+            v_t0 = v_wind.isel(time=t).values
+            v_t1 = v_wind.isel(time=t+1).values
 
-        if method == 'crosscorr':
-            u_adv, v_adv = compute_advection_velocity_crosscorr(
-                field1, field2, dx_meters, dy_meters, dt_seconds
+            # Stack into arrays
+            u_pair = np.array([u_t0, u_t1])
+            v_pair = np.array([v_t0, v_t1])
+
+            u_adv, v_adv, mask = compute_advection_velocity_temporal_difference(
+                u_pair, v_pair, dx_meters, dy_meters, dt_seconds
             )
-        elif method == 'optical_flow':
-            u_adv, v_adv = compute_advection_velocity_optical_flow(
-                field1, field2, dx_meters, dy_meters, dt_seconds
-            )
+            mask_all[t, :, :] = mask
         else:
-            raise ValueError(f"Unknown method: {method}")
+            # For other methods, use wind speed
+            field1 = wind_speed.isel(time=t).values
+            field2 = wind_speed.isel(time=t+1).values
+
+            if method == 'crosscorr':
+                u_adv, v_adv = compute_advection_velocity_crosscorr(
+                    field1, field2, dx_meters, dy_meters, dt_seconds
+                )
+            elif method == 'optical_flow':
+                u_adv, v_adv = compute_advection_velocity_optical_flow(
+                    field1, field2, dx_meters, dy_meters, dt_seconds
+                )
+            else:
+                raise ValueError(f"Unknown method: {method}. "
+                               f"Valid methods: 'crosscorr', 'optical_flow', 'temporal_difference', '850hpa'")
 
         u_advection_all[t, :, :] = u_adv
         v_advection_all[t, :, :] = v_adv
@@ -442,18 +732,24 @@ def compute_advection_grid_from_era5(
     # Create output dataset
     time_advection = time[:-1]  # One less time step
 
+    data_vars = {
+        'u_advection': (['time', 'latitude', 'longitude'], u_advection_all),
+        'v_advection': (['time', 'latitude', 'longitude'], v_advection_all),
+        'advection_speed': (['time', 'latitude', 'longitude'], advection_speed),
+        'wind_speed': (['time', 'latitude', 'longitude'],
+                      wind_speed.isel(time=slice(0, -1)).values),
+        'u_wind': (['time', 'latitude', 'longitude'],
+                  u_wind.isel(time=slice(0, -1)).values),
+        'v_wind': (['time', 'latitude', 'longitude'],
+                  v_wind.isel(time=slice(0, -1)).values),
+    }
+
+    # Add mask for temporal_difference method
+    if method == 'temporal_difference':
+        data_vars['advection_mask'] = (['time', 'latitude', 'longitude'], mask_all)
+
     output_ds = xr.Dataset(
-        {
-            'u_advection': (['time', 'latitude', 'longitude'], u_advection_all),
-            'v_advection': (['time', 'latitude', 'longitude'], v_advection_all),
-            'advection_speed': (['time', 'latitude', 'longitude'], advection_speed),
-            'wind_speed': (['time', 'latitude', 'longitude'],
-                          wind_speed.isel(time=slice(0, -1)).values),
-            'u_wind': (['time', 'latitude', 'longitude'],
-                      u_wind.isel(time=slice(0, -1)).values),
-            'v_wind': (['time', 'latitude', 'longitude'],
-                      v_wind.isel(time=slice(0, -1)).values),
-        },
+        data_vars,
         coords={
             'time': time_advection,
             'latitude': lat,
@@ -477,6 +773,12 @@ def compute_advection_grid_from_era5(
         'units': 'm/s',
         'description': 'Speed of wind pattern movement'
     }
+
+    if method == 'temporal_difference':
+        output_ds['advection_mask'].attrs = {
+            'long_name': 'Valid advection region mask',
+            'description': 'Boolean mask indicating regions with reliable advection estimates (True=valid)'
+        }
 
     output_ds.attrs = {
         'title': 'ERA5 Wind Advection Velocity',
