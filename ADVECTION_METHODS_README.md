@@ -31,39 +31,64 @@ Two methods have been implemented to estimate advection velocity:
 **Data Requirements**:
 - ERA5 pressure-level data with u and v wind components at 850 hPa
 
-### Method 2: Temporal Difference Optical Flow
+### Method 2: Temporal Difference Optical Flow (Ramp Tracking)
 
-**Rationale**: Wind ramps manifest as rapid changes in wind speed. By computing Δu(t) = u(t) - u(t-1), we isolate regions of acceleration and deceleration. Applying optical flow to these difference fields tracks how patterns of change propagate through space.
+**Rationale**: Wind ramps manifest as rapid changes in wind speed. By computing Δu(t) = u(t) - u(t-1), we isolate regions of acceleration and deceleration. This method first **detects ramps** in the difference field, then applies optical flow specifically to track how these ramp patterns propagate through space.
 
 **Implementation**: `compute_advection_velocity_temporal_difference()` in `era5_wind_advection.py`
 
 **Algorithm Steps**:
-1. Compute temporal differences: Δu(t) = u(t) - u(t-1), Δv(t) = v(t) - v(t-1)
-2. Apply spatial smoothing to reduce noise (Gaussian filter)
-3. Compute optical flow on the difference field magnitude
-4. Apply edge masking based on gradient strength
-5. Mask boundary regions to avoid edge artifacts
+1. Compute temporal differences at two consecutive times:
+   - Δu(t) = u(t) - u(t-1) and Δu(t+1) = u(t+1) - u(t)
+   - Δv(t) = v(t) - v(t-1) and Δv(t+1) = v(t+1) - v(t)
+2. **Detect ramps** in the difference fields:
+   - Identify regions where magnitude exceeds threshold (e.g., 1 m/s)
+   - AND rate of change exceeds threshold (e.g., 1 m/s per time step)
+   - Creates a `ramp_mask` showing where ramps exist
+3. Apply spatial smoothing to reduce noise (Gaussian filter) while preserving ramp edges
+4. Apply optical flow to track how the ramp patterns move from t to t+1
+5. Apply edge masking based on gradient strength
+6. Mask boundary regions to avoid edge artifacts
+7. Combine masks: only report advection where ramps are present AND gradients are strong
 
 **Advantages**:
-- Directly tracks patterns of wind speed change (ramps)
-- Captures both acceleration and deceleration
+- Specifically tracks wind ramp propagation (not just any changes)
+- Captures both acceleration and deceleration ramps
 - Can detect local-scale advection features
 - Only requires single-level wind data
+- More physically meaningful: tracks actual ramp features
 
 **Limitations**:
-- Sensitive to noise in temporal differences
+- Requires 3 consecutive time steps (outputs n_times-2 instead of n_times-1)
+- Sensitive to ramp detection thresholds
 - Requires careful tuning of smoothing parameters
-- Edge effects require masking
-- May be less accurate in regions with weak gradients
+- Only provides advection estimates where ramps are present
+- May miss advection in regions without strong ramps
 
 **Data Requirements**:
 - ERA5 single-level data (e.g., 100m wind) with hourly temporal resolution
+- At least 3 consecutive time steps for each advection estimate
 
 ## Key Parameters
 
 ### Temporal Difference Method
 
+- **ramp_magnitude_threshold** (default: 1.0 m/s): Minimum magnitude of change to be considered a ramp
+  - Based on Δu = u(t) - u(t-1)
+  - Higher values = only detect strong ramps
+  - Lower values = detect weaker ramps but more noise
+  - Recommended range: 0.5 - 2.0 m/s
+  - Typical significant ramp: 1-3 m/s change over 1 hour
+
+- **ramp_rate_threshold** (default: 1.0 m/s per time_step): Minimum rate of change to be considered a ramp
+  - Filters out slow gradual changes
+  - For hourly data: 1 m/s per hour
+  - Higher values = only rapid ramps
+  - Lower values = includes slower ramps
+  - Recommended range: 0.5 - 2.0 m/s per time_step
+
 - **smooth_sigma** (default: 2.0): Gaussian smoothing sigma for difference fields
+  - Applied after ramp detection
   - Higher values = more smoothing, less noise but blurred ramp edges
   - Lower values = sharper features but noisier
   - Recommended range: 1.0 - 3.0
@@ -76,9 +101,22 @@ Two methods have been implemented to estimate advection velocity:
 
 ## Special Considerations
 
+### Ramp Detection
+
+The temporal difference method first detects ramps, then tracks them. Proper tuning of ramp thresholds is critical:
+
+- **ramp_magnitude_threshold**: Too high = miss weak ramps; too low = track noise as ramps
+- **ramp_rate_threshold**: Too high = miss gradual ramps; too low = track slow changes
+
+**Recommendation**: For wind turbine applications, start with:
+- Magnitude: 1.0 m/s (detects changes significant for power output)
+- Rate: 1.0 m/s/hour (distinguishes ramps from diurnal cycles)
+
+Adjust based on your application and turbine power curve sensitivity.
+
 ### Smoothing
 
-The temporal difference field Δu can be noisy, especially in regions with weak gradients. Spatial smoothing helps but must be balanced:
+The difference field Δu can be noisy, especially in regions with weak gradients. Spatial smoothing (applied after ramp detection) helps but must be balanced:
 
 - **Too little smoothing**: Noisy advection estimates, unreliable tracking
 - **Too much smoothing**: Blurred ramp edges, reduced spatial resolution
@@ -95,12 +133,12 @@ The difference field has edge artifacts when ramp patterns enter or exit the dom
 
 ### Sign and Direction
 
-The difference field gives both positive (acceleration) and negative (deceleration) values. Both are tracked:
+The difference field gives both positive (acceleration) and negative (deceleration) values. Ramps of both types are detected and tracked:
 
-- **Positive Δu**: Wind speed increasing (up-ramps)
-- **Negative Δu**: Wind speed decreasing (down-ramps)
+- **Positive Δu**: Wind speed increasing (up-ramps) - detected when magnitude and rate exceed thresholds
+- **Negative Δu**: Wind speed decreasing (down-ramps) - detected when magnitude and rate exceed thresholds
 
-The optical flow tracks the movement of these patterns, regardless of sign.
+The ramp detection uses **absolute magnitude** of the change, so both up-ramps and down-ramps are detected if they exceed the thresholds. The optical flow then tracks the spatial propagation of these ramp patterns, regardless of sign.
 
 ## Usage Example
 
@@ -262,8 +300,12 @@ python example_advection_comparison.py
 The analysis generates several output files:
 
 - `advection_850hpa.nc`: 850 hPa advection velocity grid
-- `advection_temporal_difference.nc`: Temporal difference advection grid (includes mask)
-- `ramp_detection_summary.csv`: Detected ramps at all stations
+  - Variables: u_advection, v_advection, advection_speed
+- `advection_temporal_difference.nc`: Temporal difference advection grid
+  - Variables: u_advection, v_advection, advection_speed, advection_mask, ramp_mask
+  - `advection_mask`: Combined mask (ramps + strong gradients + not near boundaries)
+  - `ramp_mask`: Where ramps were detected in the difference field
+- `ramp_detection_summary.csv`: Detected ramps at all stations (time series analysis)
 - `comparison_t*.png`: Side-by-side comparison plots at different times
 - `validation_*.png`: Validation scatter plots and error distributions
 
@@ -297,12 +339,30 @@ The analysis generates several output files:
 **Possible causes**:
 - Weak gradients in difference field
 - Edge masking too aggressive
+- Ramp detection thresholds too high (no ramps detected)
 - Insufficient spatial domain
 
 **Solutions**:
 - Reduce edge_threshold parameter
+- Reduce ramp_magnitude_threshold and ramp_rate_threshold
+- Check ramp_mask output to see if ramps are being detected
 - Increase spatial domain size
 - Check that input data has sufficient temporal resolution
+
+### Problem: No ramps detected (ramp_mask is all False)
+
+**Possible causes**:
+- Ramp thresholds too high for your data
+- Temporal resolution too coarse (e.g., 6-hourly instead of hourly)
+- Study period has no significant wind events
+- Data is too smooth (already heavily filtered)
+
+**Solutions**:
+- Lower ramp_magnitude_threshold (try 0.5 m/s)
+- Lower ramp_rate_threshold (try 0.5 m/s per time step)
+- Check wind speed time series for actual ramp events
+- Use higher temporal resolution data (hourly recommended)
+- Verify wind speed variability is realistic
 
 ### Problem: Poor validation against observations
 

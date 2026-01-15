@@ -168,7 +168,10 @@ def main():
 
     if era5_single_file.exists():
         print("\nComputing temporal difference advection...")
-        print("This method applies optical flow to Δu(t) = u(t) - u(t-1)")
+        print("This method:")
+        print("  1. Detects ramps in Δu(t) = u(t) - u(t-1)")
+        print("  2. Applies smoothing and edge masking")
+        print("  3. Tracks ramp propagation with optical flow")
         try:
             advection_temporal = compute_advection_grid_from_era5(
                 era5_file=str(era5_single_file),
@@ -177,6 +180,13 @@ def main():
                 time_step_hours=1
             )
             print(f"✓ Method 2 complete: {advection_temporal_file}")
+
+            # Report on ramp detection if available
+            if 'ramp_mask' in advection_temporal:
+                total_ramps = advection_temporal['ramp_mask'].sum().values
+                total_points = advection_temporal['ramp_mask'].size
+                print(f"  Ramps detected in {total_ramps} / {total_points} space-time points "
+                      f"({100*total_ramps/total_points:.1f}%)")
         except Exception as e:
             print(f"Error computing temporal difference advection: {e}")
             advection_temporal = None
